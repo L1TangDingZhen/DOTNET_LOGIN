@@ -6,6 +6,9 @@ using Microsoft.IdentityModel.Tokens;
 using System.Linq;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
+using LOG.Services;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 
 namespace LOG.Controllers
 {
@@ -13,14 +16,14 @@ namespace LOG.Controllers
     [ApiController]
     public class AccountController : ControllerBase
     {
-
         private readonly ApplicationDbContext _context;
+        private readonly JwtService _jwtService;
 
-        public AccountController(ApplicationDbContext context)
+        public AccountController(ApplicationDbContext context, JwtService jwtService)
         {
             _context = context;
+            _jwtService = jwtService;
         }
-
 
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] Models.LoginRequest loginRequest)
@@ -30,8 +33,8 @@ namespace LOG.Controllers
             {
                 return BadRequest("Invalid user data");
             }
-            
-            // enrypt password
+
+            // Encrypt password
             var hashedPassword = PasswordHelper.HashPassword(loginRequest.Password);
 
             var user = new User
@@ -54,7 +57,7 @@ namespace LOG.Controllers
             {
                 return BadRequest("Invalid login data");
             }
-            // find user
+            // Find user
             var user = _context.Users.SingleOrDefault(u => u.Name == loginRequest.Name);
 
             if (user == null || !PasswordHelper.VerifyPassword(loginRequest.Password, user.Password))
@@ -62,36 +65,35 @@ namespace LOG.Controllers
                 return Unauthorized("Invalid username or password");
             }
 
-            return Ok("Login successful");
-        }
-        private bool VerifyPassword(string inputPassword, string storedPassword)
-        {
-            return inputPassword == storedPassword;
+            var token = _jwtService.GenerateToken(user);
+            return Ok(new { Token = "Bearer " + token });
         }
 
+        [Authorize]
         [HttpPost("cancel")]
         public IActionResult Cancel([FromBody] User user)
         {
             // Cancel user
             if (user == null || string.IsNullOrEmpty(user.Name) || string.IsNullOrEmpty(user.Password))
             {
-                return new BadRequestResult();
+                return BadRequest("Invalid user data");
             }
 
-            var existingUser = _context.Users.SingleOrDefault(u => u.Name == user.Name && u.Password == user.Password);
+            var existingUser = _context.Users.SingleOrDefault(u => u.Name == user.Name && PasswordHelper.VerifyPassword(user.Password, u.Password));
             if (existingUser == null)
             {
                 return NotFound("User not found");
             }
 
-            existingUser.IsActivated = false; // Example upgrade logic
+            existingUser.IsActivated = false; // Deactivate user
             _context.SaveChanges();
 
-            return new OkResult();
+            return Ok("User cancelled successfully");
         }
 
-        [HttpPost("uprade")]
-        public async Task<IActionResult> TaskAsync<Upgrade>([FromBody] User user)
+        [Authorize]
+        [HttpPost("upgrade")]
+        public async Task<IActionResult> Upgrade([FromBody] User user)
         {
             // Upgrade user
             if (user == null || string.IsNullOrEmpty(user.Name) || string.IsNullOrEmpty(user.Password))
@@ -108,7 +110,16 @@ namespace LOG.Controllers
             existingUser.Name = user.Name;
             existingUser.Password = PasswordHelper.HashPassword(user.Password);
             await _context.SaveChangesAsync();
-            return Ok("User registered successfully");
+
+            return Ok("User updated successfully");
+        }
+
+        [Authorize]
+        [HttpPost("logout")]
+        public IActionResult Logout()
+        {
+            // JWT is stateless, logout can be handled on the client side by removing the token
+            return Ok("User logged out successfully");
         }
 
         [HttpGet("all")]
@@ -116,6 +127,50 @@ namespace LOG.Controllers
         {
             return Ok(_context.Users.ToList());
         }
+
+        //[Authorize]
+        //[HttpPost("me")]
+        //public IActionResult Me()
+        //{
+        //    var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        //    var user = _context.Users.Find(int.Parse(userId));
+        //    if (user == null)
+        //    {
+        //        return NotFound("User not found");
+        //    }
+
+        //    return Ok(new { user.Name });
+        //}
+        [Authorize]
+        [HttpPost("me")]
+        public IActionResult Me()
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            Console.WriteLine($"User ID from token: {userId}");
+
+            if (string.IsNullOrEmpty(userId))
+            {
+                return BadRequest("User ID claim not found in token");
+            }
+
+            var user = _context.Users.Find(int.Parse(userId));
+            if (user == null)
+            {
+                return NotFound($"User not found for ID: {userId}");
+            }
+
+            return Ok(new { user.Name });
+        }
+
+        [Authorize]
+        [HttpPost("refresh")]
+        public IActionResult Add(double A, double B)
+        {
+            var result = A + B;
+            return Ok(result);
+        }
+
+
 
     }
 
